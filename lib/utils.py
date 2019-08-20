@@ -7,7 +7,9 @@ import sys
 import tensorflow as tf
 
 from scipy.sparse import linalg
-
+import h5py
+import datetime
+import re
 
 class DataLoader(object):
     def __init__(self, xs, ys, batch_size, pad_with_last_sample=True, shuffle=False):
@@ -193,10 +195,35 @@ def load_dataset(dataset_dir, batch_size, test_batch_size=None, **kwargs):
 
     return data
 
+def load_dataset1(dataset_dir, batch_size, test_batch_size=None, **kwargs):
+    data = {}
+    for category in ['training', 'validation']:
+        cat_data = np.load(os.path.join(dataset_dir, category + '_raw_data.npy'))
+        data['x_' + category] = np.transpose(cat_data[:, :3, :, :], [0, 1, 3, 2]) / 255.
+        data['y_' + category] = np.transpose(cat_data[:, 3:, :, :], [0, 1, 3, 2]) / 255.
+    # scaler = StandardScaler(mean=data['x_train'][..., 0].mean(), std=data['x_train'][..., 0].std())
+    # Data format
+    # for category in ['train', 'val', 'test']:
+    #     data['x_' + category][..., 0] = scaler.transform(data['x_' + category][..., 0])
+    #     data['y_' + category][..., 0] = scaler.transform(data['y_' + category][..., 0])
+
+    data['train_loader'] = DataLoader(data['x_training'], data['y_training'], batch_size, shuffle=True)
+    data['val_loader'] = DataLoader(data['x_validation'], data['y_validation'], test_batch_size, shuffle=False)
+    # data['test_loader'] = DataLoader(data['x_test'], data['y_test'], test_batch_size, shuffle=False)
+    data['scaler'] = None
+
+    return data
+
 
 def load_graph_data(pkl_filename):
     sensor_ids, sensor_id_to_ind, adj_mx = load_pickle(pkl_filename)
     return sensor_ids, sensor_id_to_ind, adj_mx
+
+def load_graph_data1(pkl_filename):
+    adj_mx = sp.load_npz(pkl_filename)
+    adj_mx = adj_mx.todense()
+
+    return adj_mx
 
 
 def load_pickle(pickle_file):
@@ -210,3 +237,95 @@ def load_pickle(pickle_file):
         print('Unable to load data ', pickle_file, ':', e)
         raise
     return pickle_data
+
+
+def create_directory_structure(root):
+    berlin = os.path.join(root, "Berlin","Berlin_test")
+    istanbul = os.path.join(root, "Istanbul","Istanbul_test")
+    moscow = os.path.join(root, "Moscow", "Moscow_test")
+    try:
+        os.makedirs(berlin)
+        os.makedirs(istanbul)
+        os.makedirs(moscow)
+    except OSError:
+        print("failed to create directory structure")
+        # sys.exit(2)
+
+def load_input_data(file_path, indicies):
+    """
+    Given a file path, load the relevant training data pieces into a tensor that is returned.
+    Return: tensor of shape (number_of_test_cases_per_file =5, 3, 495, 436, 3)
+    """
+    # load h5 file into memory.
+    fr = h5py.File(file_path, 'r')
+    a_group_key = list(fr.keys())[0]
+    data = list(fr[a_group_key])
+
+
+    # get relevant training data pieces
+    data = [data[y-3:y] for y in indicies]
+    data = np.stack(data, axis=0)
+
+    # type casting
+    data = data.astype(np.float32)
+    return data
+
+def list_filenames(directory, excluded_dates=[]):
+    """Auxilliary function which returns list of file names in directory in random order,
+        filtered by excluded dates.
+
+        Args.:
+            directory (str): path to directory
+            excluded_dates (list): list of dates which should not be included in result list,
+                e.g., ['2018-01-01', '2018-12-31']
+
+        Returns: list
+    """
+    filenames = os.listdir(directory)
+    # np.random.shuffle(filenames)
+
+    if len(excluded_dates) > 0:
+        # check if in excluded dates
+        excluded_dates = [datetime.datetime.strptime(x, '%Y-%m-%d').date() for x in excluded_dates]
+        filenames = [x for x in filenames if return_date(x) not in excluded_dates]
+
+    return filenames
+
+def cast_moving_avg(data):
+    """
+    Returns cast moving average (cast to np.uint8)
+    data = tensor of shape (5, 3, 495, 436, 3) of  type float32
+    Return: tensor of shape (5, 3, 495, 436, 3) of type uint8
+    """
+
+    prediction = []
+    for i in range(3):
+        data_slice = data[:, i:]
+        t = np.mean(data_slice, axis = 1)
+        t = np.expand_dims(t, axis = 1)
+        prediction.append(t)
+        data = np.concatenate([data, t], axis =1)
+
+    prediction = np.concatenate(prediction, axis = 1)
+    prediction = np.around(prediction)
+    prediction = prediction.astype(np.uint8)
+
+    return prediction
+
+def write_data(data, filename):
+    f = h5py.File(filename, 'w', libver='latest')
+    dset = f.create_dataset('array', shape=(data.shape), data = data, compression='gzip', compression_opts=9)
+    f.close()
+
+def return_date(file_name):
+    """Auxilliary function which returns datetime object from Traffic4Cast filename.
+
+        Args.:
+            file_name (str): file name, e.g., '20180516_100m_bins.h5'
+
+        Returns: date string, e.g., '2018-05-16'
+    """
+
+    match = re.search(r'\d{4}\d{2}\d{2}', file_name)
+    date = datetime.datetime.strptime(match.group(), '%Y%m%d').date()
+    return date

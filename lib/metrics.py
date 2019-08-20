@@ -20,7 +20,8 @@ def masked_mse_tf(preds, labels, null_val=np.nan):
     loss = tf.square(tf.subtract(preds, labels))
     loss = loss * mask
     loss = tf.where(tf.is_nan(loss), tf.zeros_like(loss), loss)
-    return tf.reduce_mean(loss)
+
+    return tf.reduce_sum(loss) / tf.reduce_sum(mask)
 
 
 def masked_mae_tf(preds, labels, null_val=np.nan):
@@ -41,7 +42,8 @@ def masked_mae_tf(preds, labels, null_val=np.nan):
     loss = tf.abs(tf.subtract(preds, labels))
     loss = loss * mask
     loss = tf.where(tf.is_nan(loss), tf.zeros_like(loss), loss)
-    return tf.reduce_mean(loss)
+
+    return tf.reduce_sum(loss) / tf.reduce_sum(mask)
 
 
 def masked_rmse_tf(preds, labels, null_val=np.nan):

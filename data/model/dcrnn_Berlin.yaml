@@ -3,7 +3,7 @@ base_dir: data/model
 log_level: INFO
 data:
   city: Berlin
-  batch_size: 32
+  batch_size: 10
   dataset_dir: ../data/Berlin/process_0.1/
   test_batch_size: 5
   val_batch_size: 5

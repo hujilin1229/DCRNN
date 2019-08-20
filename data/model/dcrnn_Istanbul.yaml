@@ -3,12 +3,12 @@ base_dir: data/model
 log_level: INFO
 data:
   city: Istanbul
-  batch_size: 16
-  dataset_dir: ../data/Istanbul/process_0.6/
+  batch_size: 5
+  dataset_dir: ../data/Istanbul/process_0.1/
   test_batch_size: 5
   val_batch_size: 5
-  graph_pkl_filename: ../data/Istanbul/process_0.6/adj_0.6.npz
-  node_pos_pkl_filename: ../data/Istanbul/process_0.6/node_pos_0.6.npy
+  graph_pkl_filename: ../data/Istanbul/process_0.1/adj_0.1.npz
+  node_pos_pkl_filename: ../data/Istanbul/process_0.1/node_pos_0.1.npy
 
 model:
   cl_decay_steps: 2000

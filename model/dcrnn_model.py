@@ -11,9 +11,8 @@ from model.dcrnn_cell import DCGRUCell
 
 
 class DCRNNModel(object):
-    def __init__(self, is_training, batch_size, scaler, adj_mx, **model_kwargs):
+    def __init__(self, is_training, batch_size, adj_mx, num_nodes, **model_kwargs):
         # Scaler for data normalization.
-        self._scaler = scaler
 
         # Train and loss
         self._loss = None
@@ -25,7 +24,7 @@ class DCRNNModel(object):
         filter_type = model_kwargs.get('filter_type', 'laplacian')
         horizon = int(model_kwargs.get('horizon', 1))
         max_grad_norm = float(model_kwargs.get('max_grad_norm', 5.0))
-        num_nodes = int(model_kwargs.get('num_nodes', 1))
+        # num_nodes = int(model_kwargs.get('num_nodes', 1))
         num_rnn_layers = int(model_kwargs.get('num_rnn_layers', 1))
         rnn_units = int(model_kwargs.get('rnn_units'))
         seq_len = int(model_kwargs.get('seq_len'))
@@ -33,6 +32,7 @@ class DCRNNModel(object):
         input_dim = int(model_kwargs.get('input_dim', 1))
         output_dim = int(model_kwargs.get('output_dim', 1))
 
+        num_nodes = num_nodes
         # Input (batch_size, timesteps, num_sensor, input_dim)
         self._inputs = tf.placeholder(tf.float32, shape=(batch_size, seq_len, num_nodes, input_dim), name='inputs')
         # Labels: (batch_size, timesteps, num_sensor, input_dim), same format with input except the temporal dimension.
@@ -78,6 +78,7 @@ class DCRNNModel(object):
 
         # Project the output to output_dim.
         outputs = tf.stack(outputs[:-1], axis=1)
+
         self._outputs = tf.reshape(outputs, (batch_size, horizon, num_nodes, output_dim), name='outputs')
         self._merged = tf.summary.merge_all()
 

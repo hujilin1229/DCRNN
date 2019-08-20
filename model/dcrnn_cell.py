@@ -107,6 +107,7 @@ class DCGRUCell(RNNCell):
                     batch_size = inputs.get_shape()[0].value
                     output = tf.reshape(new_state, shape=(-1, self._num_units))
                     output = tf.reshape(tf.matmul(output, w), shape=(batch_size, self.output_size))
+                    output = tf.sigmoid(output)
         return output, new_state
 
     @staticmethod

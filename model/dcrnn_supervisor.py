@@ -9,9 +9,10 @@ import tensorflow as tf
 import time
 import yaml
 
+from lib.utils import create_directory_structure, load_input_data, list_filenames, cast_moving_avg, write_data
 from lib import utils, metrics
 from lib.AMSGrad import AMSGrad
-from lib.metrics import masked_mae_loss
+from lib.metrics import masked_mae_loss, masked_mse_loss
 
 from model.dcrnn_model import DCRNNModel
 
@@ -36,28 +37,28 @@ class DCRNNSupervisor(object):
         self._logger.info(kwargs)
 
         # Data preparation
-        self._data = utils.load_dataset(**self._data_kwargs)
+        self._data = utils.load_dataset1(**self._data_kwargs)
         for k, v in self._data.items():
             if hasattr(v, 'shape'):
                 self._logger.info((k, v.shape))
 
+        num_batches, seq_len, num_nodes, in_dim = self._data['x_training'].shape
         # Build models.
         scaler = self._data['scaler']
         with tf.name_scope('Train'):
             with tf.variable_scope('DCRNN', reuse=False):
-                self._train_model = DCRNNModel(is_training=True, scaler=scaler,
+                self._train_model = DCRNNModel(is_training=True, num_nodes=num_nodes,
                                                batch_size=self._data_kwargs['batch_size'],
                                                adj_mx=adj_mx, **self._model_kwargs)
 
-        with tf.name_scope('Test'):
+        with tf.name_scope('Eval'):
             with tf.variable_scope('DCRNN', reuse=True):
-                self._test_model = DCRNNModel(is_training=False, scaler=scaler,
+                self._test_model = DCRNNModel(is_training=False, num_nodes=num_nodes,
                                               batch_size=self._data_kwargs['test_batch_size'],
                                               adj_mx=adj_mx, **self._model_kwargs)
 
         # Learning rate.
-        self._lr = tf.get_variable('learning_rate', shape=(), initializer=tf.constant_initializer(0.01),
-                                   trainable=False)
+        self._lr = tf.get_variable('learning_rate', shape=(), initializer=tf.constant_initializer(0.01), trainable=False)
         self._new_lr = tf.placeholder(tf.float32, shape=(), name='new_learning_rate')
         self._lr_update = tf.assign(self._lr, self._new_lr, name='lr_update')
 
@@ -76,7 +77,7 @@ class DCRNNSupervisor(object):
         labels = self._train_model.labels[..., :output_dim]
 
         null_val = 0.
-        self._loss_fn = masked_mae_loss(scaler, null_val)
+        self._loss_fn = masked_mse_loss(scaler, null_val)
         self._train_loss = self._loss_fn(preds=preds, labels=labels)
 
         tvars = tf.trainable_variables()
@@ -100,6 +101,7 @@ class DCRNNSupervisor(object):
     def _get_log_dir(kwargs):
         log_dir = kwargs['train'].get('log_dir')
         if log_dir is None:
+            city = kwargs['data'].get('city')
             batch_size = kwargs['data'].get('batch_size')
             learning_rate = kwargs['train'].get('base_lr')
             max_diffusion_step = kwargs['model'].get('max_diffusion_step')
@@ -114,8 +116,8 @@ class DCRNNSupervisor(object):
                 filter_type_abbr = 'R'
             elif filter_type == 'dual_random_walk':
                 filter_type_abbr = 'DR'
-            run_id = 'dcrnn_%s_%d_h_%d_%s_lr_%g_bs_%d_%s/' % (
-                filter_type_abbr, max_diffusion_step, horizon,
+            run_id = 'dcrnn_%s_%s_%d_h_%d_%s_lr_%g_bs_%d_%s/' % (
+                city, filter_type_abbr, max_diffusion_step, horizon,
                 structure, learning_rate, batch_size,
                 time.strftime('%m%d%H%M%S'))
             base_dir = kwargs.get('base_dir')
@@ -152,8 +154,8 @@ class DCRNNSupervisor(object):
 
         for _, (x, y) in enumerate(data_generator):
             feed_dict = {
-                model.inputs: x,
-                model.labels: y,
+                model.inputs: x[..., :output_dim],
+                model.labels: y[..., :output_dim],
             }
 
             vals = sess.run(fetches, feed_dict=feed_dict)
@@ -188,6 +190,7 @@ class DCRNNSupervisor(object):
     def _train(self, sess, base_lr, epoch, steps, patience=50, epochs=100,
                min_learning_rate=2e-6, lr_decay_ratio=0.1, save_model=1,
                test_every_n_epochs=10, **train_kwargs):
+
         history = []
         min_val_loss = float('inf')
         wait = 0
@@ -228,11 +231,11 @@ class DCRNNSupervisor(object):
                                      ['loss/train_loss', 'metric/train_mae', 'loss/val_loss', 'metric/val_mae'],
                                      [train_loss, train_mae, val_loss, val_mae], global_step=global_step)
             end_time = time.time()
-            message = 'Epoch [{}/{}] ({}) train_mae: {:.4f}, val_mae: {:.4f} lr:{:.6f} {:.1f}s'.format(
-                self._epoch, epochs, global_step, train_mae, val_mae, new_lr, (end_time - start_time))
+            message = 'Epoch [{}/{}] ({}) train_mse: {:.4f}, val_mse: {:.4f} lr:{:.6f} {:.1f}s'.format(
+                self._epoch, epochs, global_step, train_loss, val_loss, new_lr, (end_time - start_time))
             self._logger.info(message)
-            if self._epoch % test_every_n_epochs == test_every_n_epochs - 1:
-                self.evaluate(sess)
+            # if self._epoch % test_every_n_epochs == test_every_n_epochs - 1:
+            #     self.evaluate(sess)
             if val_loss <= min_val_loss:
                 wait = 0
                 if save_model > 0:
@@ -269,10 +272,12 @@ class DCRNNSupervisor(object):
         predictions = []
         y_truths = []
         for horizon_i in range(self._data['y_test'].shape[1]):
-            y_truth = scaler.inverse_transform(self._data['y_test'][:, horizon_i, :, 0])
+            # y_truth = scaler.inverse_transform(self._data['y_test'][:, horizon_i, :, 0])
+            y_truth = self._data['y_test'][:, horizon_i, :, :] * 255.
             y_truths.append(y_truth)
+            y_pred = y_preds[:y_truth.shape[0], horizon_i, :, :] * 255.
 
-            y_pred = scaler.inverse_transform(y_preds[:y_truth.shape[0], horizon_i, :, 0])
+            # y_pred = scaler.inverse_transform(y_preds[:y_truth.shape[0], horizon_i, :, 0])
             predictions.append(y_pred)
 
             mae = metrics.masked_mae_np(y_pred, y_truth, null_val=0)
@@ -293,6 +298,45 @@ class DCRNNSupervisor(object):
             'groundtruth': y_truths
         }
         return outputs
+
+    def pred_write_submission_files_with_avg(self, sess, args, node_pos, indicies):
+        """
+        combine the results from graph output and avg value for non-selected pixels
+
+        :param model:
+        :param input_path:
+        :param output_path:
+        :return:
+        """
+        create_directory_structure(args.output_dir)
+
+        # get file names
+        data_dir = os.path.join(args.data_dir, args.city, args.city + '_test')
+        sub_files = list_filenames(data_dir, [])
+        for f in sub_files:
+            # load data, shape (5, 3, 495, 436, 3), data range 0-255
+            data_sub = load_input_data(os.path.join(data_dir, f), indicies)
+            # cvt to graph data with node_pos
+            # select the first two dimension for prediction
+            graph_data_sub = data_sub[:, :, node_pos[:, 0], node_pos[:, 1], :2] / 255.
+
+            fetches = {
+                'outputs': self._test_model.outputs
+            }
+            feed_dict = {
+                self._test_model.inputs: graph_data_sub,
+            }
+            vals = sess.run(fetches, feed_dict=feed_dict)
+
+            # the output shape is (batch_size, horizon, num_nodes, output_dim)
+            pred = vals['outputs'] * 255
+            pred = np.around(pred)
+            pred = pred.astype(np.uint8)
+            outdata = cast_moving_avg(data_sub)
+            outdata[:, :, node_pos[:, 0], node_pos[:, 1], :2] = pred[:, :, :, :2]
+            outfile = os.path.join(args.output_dir, args.city, args.city + '_test', f)
+            write_data(outdata, outfile)
+            print("City:{}, just wrote file {}".format(args.city, outfile), flush=True)
 
     def load(self, sess, model_filename):
         """
